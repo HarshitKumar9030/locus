@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Locus | Silent Tracking</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #09090b; color: #e4e4e7; }
+        .glass-panel { 
+            background: rgba(24, 24, 27, 0.85); 
+            backdrop-filter: blur(12px); 
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .map-container { height: 100vh; width: 100vw; z-index: 0; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+        .leaflet-container { background: #09090b; }
+        .leaflet-popup-content-wrapper { background: rgba(24, 24, 27, 0.9); color: #e4e4e7; border: 1px solid #3f3f46; border-radius: 8px; }
+        .leaflet-popup-tip { background: rgba(24, 24, 27, 0.9); }
+    </style>
+</head>
+<body class="overflow-hidden">
+
+    <!-- Map Background -->
+    <div id="map" class="map-container absolute top-0 left-0"></div>
+
+    <!-- Floating Sidebar -->
+    <aside class="absolute top-4 left-4 bottom-4 w-80 glass-panel rounded-2xl flex flex-col shadow-2xl z-[1000] transition-transform duration-300 transform translate-x-0">
+        <!-- Header -->
+        <div class="p-6 border-b border-white/10">
+            <div class="flex items-center gap-3 mb-1">
+                <div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                <h1 class="text-xl font-medium tracking-tight text-white">LOCUS</h1>
+            </div>
+            <p class="text-xs text-zinc-500 font-light">Silent Session Tracker</p>
+        </div>
+
+        <!-- Session List -->
+        <div class="flex-1 overflow-y-auto p-3 space-y-2" id="sessions-list">
+            <!-- Loading State -->
+            <div class="flex flex-col items-center justify-center h-32 text-zinc-600 space-y-2">
+                <div class="w-4 h-4 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-xs">Loading sessions...</span>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="p-4 border-t border-white/10 text-[10px] text-zinc-600 text-center">
+            Auto-syncing every 20s
+        </div>
+    </aside>
+
+    <!-- Floating Info Panel (Hidden by default) -->
+    <div id="session-info" class="absolute top-4 right-4 w-72 glass-panel rounded-2xl p-6 shadow-2xl z-[1000] hidden transition-all duration-300 opacity-0 translate-y-2">
+        <div class="flex justify-between items-start mb-6">
+            <div>
+                <h2 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">Session Details</h2>
+                <div id="info-id" class="text-xs font-mono text-zinc-600 mt-1"></div>
+            </div>
+            <div id="info-status-badge" class="w-2 h-2 rounded-full bg-zinc-700"></div>
+        </div>
+
+        <div class="space-y-4">
+            <div class="flex justify-between items-center">
+                <span class="text-xs text-zinc-500">Device</span>
+                <span id="info-device" class="text-sm font-medium text-zinc-200"></span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-xs text-zinc-500">Data Points</span>
+                <span id="info-points" class="text-sm font-mono text-emerald-400">0</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-xs text-zinc-500">Last Update</span>
+                <span id="info-last" class="text-xs text-zinc-300"></span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-xs text-zinc-500">Duration</span>
+                <span id="info-duration" class="text-xs text-zinc-300"></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Map Config
+        const map = L.map('map', {
+            zoomControl: false,
+            attributionControl: false
+        }).setView([20, 0], 2);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        // Dark Matter Tile Layer
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 20,
+            subdomains: 'abcd'
+        }).addTo(map);
+
+        let currentPolyline = null;
+        let currentMarkers = [];
+        let activeSessionId = null;
+        let refreshInterval = null;
+
+        // Fetch Sessions
+        async function fetchSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                const sessions = await res.json();
+                renderSessions(sessions);
+            } catch (err) {
+                console.error('Error fetching sessions:', err);
+            }
+        }
+
+        function renderSessions(sessions) {
+            const container = document.getElementById('sessions-list');
+            container.innerHTML = '';
+
+            if (sessions.length === 0) {
+                container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full text-zinc-600">
+                        <span class="text-xs">No active sessions</span>
+                    </div>`;
+                return;
+            }
+
+            sessions.forEach(session => {
+                const isActive = session.isActive === 1 && Date.now() < session.endTime;
+                const el = document.createElement('div');
+                const isSelected = activeSessionId === session.id;
+                
+                el.className = `group p-4 rounded-xl cursor-pointer transition-all duration-200 border ${isSelected ? 'bg-white/5 border-emerald-500/30 shadow-lg' : 'bg-transparent border-transparent hover:bg-white/5 hover:border-white/5'}`;
+                el.onclick = () => loadSession(session);
+                
+                const startTime = new Date(session.startTime);
+                const timeStr = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const dateStr = startTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+                el.innerHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-mono text-[10px] text-zinc-500 group-hover:text-zinc-400 transition-colors">${session.id.split('-')[0]}</span>
+                        ${isActive 
+                            ? '<span class="flex h-1.5 w-1.5 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span></span>' 
+                            : '<span class="h-1.5 w-1.5 rounded-full bg-zinc-700"></span>'}
+                    </div>
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <div class="text-sm font-medium text-zinc-200 mb-0.5">${session.deviceId}</div>
+                            <div class="text-[10px] text-zinc-500">${dateStr} • ${timeStr}</div>
+                        </div>
+                        <div class="text-[10px] text-zinc-600 group-hover:text-zinc-500 transition-colors">
+                            ${isActive ? 'Tracking' : 'Ended'}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(el);
+            });
+        }
+
+        async function loadSession(session) {
+            activeSessionId = session.id;
+            fetchSessions(); // Re-render list to update selection state
+            
+            // Show Info Panel
+            const infoPanel = document.getElementById('session-info');
+            infoPanel.classList.remove('hidden');
+            // Small delay to allow display:block to apply before opacity transition
+            setTimeout(() => {
+                infoPanel.classList.remove('opacity-0', 'translate-y-2');
+            }, 10);
+
+            document.getElementById('info-id').textContent = session.id;
+            document.getElementById('info-device').textContent = session.deviceId;
+            
+            const isActive = session.isActive === 1 && Date.now() < session.endTime;
+            const badge = document.getElementById('info-status-badge');
+            badge.className = `w-2 h-2 rounded-full ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-red-500'}`;
+
+            // Calculate Duration
+            const start = new Date(session.startTime);
+            const end = isActive ? new Date() : new Date(session.endTime);
+            const diffHrs = ((end - start) / 36e5).toFixed(1);
+            document.getElementById('info-duration').textContent = `${diffHrs} hrs`;
+
+            // Clear map
+            if (currentPolyline) map.removeLayer(currentPolyline);
+            currentMarkers.forEach(m => map.removeLayer(m));
+            currentMarkers = [];
+
+            await updateMapData(session.id);
+
+            // Start polling if active
+            if (refreshInterval) clearInterval(refreshInterval);
+            if (isActive) {
+                refreshInterval = setInterval(() => updateMapData(session.id), 20000);
+            }
+        }
+
+        async function updateMapData(sessionId) {
+            try {
+                const res = await fetch(`/api/session/${sessionId}/locations`);
+                const locations = await res.json();
+                
+                document.getElementById('info-points').textContent = locations.length;
+                if (locations.length > 0) {
+                    const lastLoc = locations[locations.length - 1];
+                    document.getElementById('info-last').textContent = new Date(lastLoc.timestamp).toLocaleTimeString();
+                } else {
+                    document.getElementById('info-last').textContent = '-';
+                }
+
+                const latlngs = locations.map(loc => [loc.latitude, loc.longitude]);
+
+                // Update Polyline
+                if (currentPolyline) map.removeLayer(currentPolyline);
+                currentPolyline = L.polyline(latlngs, { 
+                    color: '#10b981', // Emerald 500
+                    weight: 3, 
+                    opacity: 0.8,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                }).addTo(map);
+
+                // Update Markers
+                currentMarkers.forEach(m => map.removeLayer(m));
+                currentMarkers = [];
+
+                if (latlngs.length > 0) {
+                    // Start Marker
+                    const startIcon = L.divIcon({
+                        className: 'bg-transparent',
+                        html: '<div class="w-3 h-3 bg-white rounded-full border-2 border-emerald-500 shadow-lg"></div>'
+                    });
+                    currentMarkers.push(L.marker(latlngs[0], { icon: startIcon }).addTo(map));
+
+                    // End/Current Marker
+                    const endIcon = L.divIcon({
+                        className: 'bg-transparent',
+                        html: '<div class="w-4 h-4 bg-emerald-500 rounded-full border-2 border-white shadow-[0_0_15px_rgba(16,185,129,0.6)] animate-pulse"></div>'
+                    });
+                    currentMarkers.push(L.marker(latlngs[latlngs.length - 1], { icon: endIcon }).addTo(map));
+
+                    // Pan to latest
+                    map.panTo(latlngs[latlngs.length - 1]);
+                }
+            } catch (err) {
+                console.error('Error fetching locations:', err);
+            }
+        }
+
+        // Initial Load
+        fetchSessions();
+        setInterval(fetchSessions, 20000); // Refresh list every 20s
+
+    </script>
+</body>
+</html>
