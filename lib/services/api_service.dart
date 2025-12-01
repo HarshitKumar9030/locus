@@ -57,11 +57,18 @@ class ApiService {
   Future<bool> sendLocations(List<Map<String, dynamic>> locations) async {
     final baseUrl = await getBaseUrl();
     try {
+      print('📍 Sending ${locations.length} locations to $baseUrl/api/location');
+      print('📍 Data: ${jsonEncode(locations)}');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/api/location'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(locations),
       ).timeout(_timeout);
+      
+      print('📍 Response status: ${response.statusCode}');
+      print('📍 Response body: ${response.body}');
+      
       return response.statusCode == 200;
     } catch (e) {
       print('Error sending locations: $e');

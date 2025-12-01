@@ -98,29 +98,40 @@ app.post('/api/session/stop', async (req, res) => {
 // Report location (Single or Batch)
 app.post('/api/location', async (req, res) => {
     const body = req.body;
+    console.log('📍 Received location request:', JSON.stringify(body));
+    
     const locations = Array.isArray(body) ? body : [body];
 
-    if (locations.length === 0) return res.json({ message: 'No data' });
+    if (locations.length === 0) {
+        console.log('📍 No locations in request');
+        return res.json({ message: 'No data' });
+    }
 
     const sessionId = locations[0].sessionId;
+    console.log(`📍 Processing ${locations.length} locations for session: ${sessionId}`);
 
     try {
         // Check session exists
         const sessionResult = await pool.query(`SELECT * FROM sessions WHERE id = $1`, [sessionId]);
         if (sessionResult.rows.length === 0) {
+            console.log(`📍 Session not found: ${sessionId}`);
             return res.status(404).json({ error: 'Session not found' });
         }
 
         // Insert all locations
+        let insertedCount = 0;
         for (const loc of locations) {
             await pool.query(
                 `INSERT INTO locations (session_id, latitude, longitude, timestamp) VALUES ($1, $2, $3, $4)`,
                 [sessionId, loc.latitude, loc.longitude, loc.timestamp || Date.now()]
             );
+            insertedCount++;
         }
 
+        console.log(`📍 Successfully inserted ${insertedCount} locations`);
         res.json({ message: `Recorded ${locations.length} locations` });
     } catch (err) {
+        console.error(`📍 Error inserting locations: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
 });

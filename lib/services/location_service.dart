@@ -285,6 +285,9 @@ void onStart(ServiceInstance service) async {
             'timestamp': DateTime.now().millisecondsSinceEpoch,
           };
 
+          print('📍 Got location: ${position.latitude}, ${position.longitude}');
+          print('📍 Session ID: $sessionId');
+
           // Add to queue with size limit
           List<String> queue = prefs.getStringList(queueKey) ?? [];
           if (queue.length < _maxQueueSize) {
@@ -297,6 +300,8 @@ void onStart(ServiceInstance service) async {
             await prefs.setStringList(queueKey, queue);
             print('Queue full, removed oldest entries');
           }
+          
+          print('📍 Queue size after adding: ${queue.length}');
 
           // Try to flush queues if we have internet
           if (hasInternet) {
