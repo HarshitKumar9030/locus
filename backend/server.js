@@ -57,6 +57,22 @@ async function initDB() {
                 is_read INTEGER DEFAULT 0
             )
         `);
+        
+        // Device logs table for remote debugging
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS device_logs (
+                id SERIAL PRIMARY KEY,
+                device_id TEXT,
+                device_model TEXT,
+                level TEXT,
+                tag TEXT,
+                message TEXT,
+                extra JSONB,
+                timestamp BIGINT,
+                received_at BIGINT
+            )
+        `);
+        
         console.log('Database tables initialized');
     } catch (err) {
         console.error('Error initializing database:', err.message);
@@ -413,6 +429,104 @@ ${loc.speed !== null ? `        <extensions><speed>${loc.speed}</speed></extensi
         res.setHeader('Content-Type', 'application/gpx+xml');
         res.setHeader('Content-Disposition', `attachment; filename="locus-${sessionId}.gpx"`);
         res.send(gpx);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============ DEVICE LOGS ENDPOINTS ============
+
+// Receive logs from devices
+app.post('/api/logs', async (req, res) => {
+    const { deviceId, deviceModel, logs } = req.body;
+    const receivedAt = Date.now();
+    
+    try {
+        if (!logs || !Array.isArray(logs)) {
+            return res.status(400).json({ error: 'Invalid logs format' });
+        }
+        
+        console.log(`📋 Received ${logs.length} logs from ${deviceModel || deviceId}`);
+        
+        for (const log of logs) {
+            await pool.query(
+                `INSERT INTO device_logs (device_id, device_model, level, tag, message, extra, timestamp, received_at) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [
+                    deviceId || 'unknown',
+                    deviceModel || 'unknown',
+                    log.level || 'INFO',
+                    log.tag || 'unknown',
+                    log.message || '',
+                    JSON.stringify(log.extra || {}),
+                    log.timestamp || receivedAt,
+                    receivedAt
+                ]
+            );
+        }
+        
+        res.json({ message: 'Logs received', count: logs.length });
+    } catch (err) {
+        console.error('Error saving logs:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get logs (for dashboard viewing)
+app.get('/api/logs', async (req, res) => {
+    const { deviceId, level, limit = 500 } = req.query;
+    
+    try {
+        let query = `SELECT * FROM device_logs`;
+        const params = [];
+        const conditions = [];
+        
+        if (deviceId) {
+            params.push(deviceId);
+            conditions.push(`device_id = $${params.length}`);
+        }
+        if (level) {
+            params.push(level);
+            conditions.push(`level = $${params.length}`);
+        }
+        
+        if (conditions.length > 0) {
+            query += ` WHERE ${conditions.join(' AND ')}`;
+        }
+        
+        params.push(parseInt(limit));
+        query += ` ORDER BY timestamp DESC LIMIT $${params.length}`;
+        
+        const result = await pool.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get unique devices that have sent logs
+app.get('/api/logs/devices', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT device_id, device_model, 
+                   COUNT(*) as log_count,
+                   MAX(timestamp) as last_log
+            FROM device_logs 
+            GROUP BY device_id, device_model 
+            ORDER BY last_log DESC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Clear logs for a device (useful for cleanup)
+app.delete('/api/logs/:deviceId', async (req, res) => {
+    const { deviceId } = req.params;
+    try {
+        const result = await pool.query(`DELETE FROM device_logs WHERE device_id = $1`, [deviceId]);
+        res.json({ message: 'Logs cleared', count: result.rowCount });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

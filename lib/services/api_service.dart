@@ -6,9 +6,8 @@ class ApiService {
   static const String _baseUrlKey = 'api_base_url';
   static const Duration _timeout = Duration(seconds: 15); // Timeout for HTTP requests
   
-  // Default to localhost for emulator (10.0.2.2 for Android)
-  // The user should change this in the app settings
-  static const String _defaultUrl = 'http://10.0.2.2:3000'; 
+  // Default production URL
+  static const String _defaultUrl = 'https://locus.agfe.tech'; 
 
   Future<String> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();

@@ -835,7 +835,7 @@ class _HomePageState extends State<HomePage>
 
       final service = FlutterBackgroundService();
       if (!await service.isRunning()) {
-        service.startService();
+        await service.startService();
       }
 
       setState(() {
