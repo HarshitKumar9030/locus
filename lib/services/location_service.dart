@@ -19,6 +19,10 @@ const serviceRestartKey = 'service_should_be_running';
 const alertQueueKey = 'offline_alert_queue';
 const lastLocationKey = 'last_location_data';
 const lastSuccessfulSendKey = 'last_successful_send';
+const serviceHeartbeatKey =
+    'service_last_heartbeat'; // Heartbeat for monitoring service health
+const serviceCycleCountKey =
+    'service_cycle_count'; // Count of successful cycles
 
 // Geofence Configuration - Cosmos Greens Bhiwadi
 const double _geofenceLat = 28.1944713;
@@ -232,9 +236,42 @@ void onStart(ServiceInstance service) async {
 
   // Initialize logging service
   await LogService.init();
-  await LogService.info('SERVICE', 'Background service started');
+
+  // Log service start with timestamp
+  final startTime = DateTime.now().toIso8601String();
+  await LogService.info(
+    'SERVICE',
+    'Background service starting',
+    extra: {'startTime': startTime, 'pid': 'background_isolate'},
+  );
 
   final apiService = ApiService();
+
+  // Get session info for logging
+  SharedPreferences? initPrefs;
+  try {
+    initPrefs = await SharedPreferences.getInstance();
+    final sessionId = initPrefs.getString('current_session_id');
+    final cycleCount = initPrefs.getInt(serviceCycleCountKey) ?? 0;
+    await LogService.info(
+      'SERVICE',
+      'Service initialized',
+      extra: {'sessionId': sessionId, 'previousCycles': cycleCount},
+    );
+
+    // Reset cycle count on fresh start
+    await initPrefs.setInt(serviceCycleCountKey, 0);
+    await initPrefs.setInt(
+      serviceHeartbeatKey,
+      DateTime.now().millisecondsSinceEpoch,
+    );
+  } catch (e) {
+    await LogService.error(
+      'SERVICE',
+      'Failed to init prefs',
+      extra: {'error': e.toString()},
+    );
+  }
 
   service.on('stopService').listen((event) {
     LogService.info('SERVICE', 'Stop service event received');
@@ -323,6 +360,12 @@ Future<void> _doCaptureAndSend(ApiService apiService) async {
     );
     return; // Skip this cycle, try again next time
   }
+
+  // Update heartbeat immediately - this proves the service is alive
+  final now = DateTime.now().millisecondsSinceEpoch;
+  await prefs.setInt(serviceHeartbeatKey, now);
+  final cycleCount = (prefs.getInt(serviceCycleCountKey) ?? 0) + 1;
+  await prefs.setInt(serviceCycleCountKey, cycleCount);
 
   final sessionId = prefs.getString('current_session_id');
   final endTimeMillis = prefs.getInt('session_end_time');

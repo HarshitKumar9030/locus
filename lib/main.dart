@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'services/api_service.dart';
 import 'services/location_service.dart';
+import 'services/battery_optimization_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -739,6 +740,23 @@ class _HomePageState extends State<HomePage>
     final lastAcc = prefs.getDouble('last_accuracy') ?? 0;
     final isOffline = prefs.getBool('is_offline') ?? false;
 
+    // Check service heartbeat - if more than 60s since last heartbeat, service may be dead
+    if (_isTracking) {
+      final lastHeartbeat = prefs.getInt('service_last_heartbeat') ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final timeSinceHeartbeat = now - lastHeartbeat;
+      
+      // If more than 60 seconds since last heartbeat, try to restart service
+      if (lastHeartbeat > 0 && timeSinceHeartbeat > 60000) {
+        print('⚠️ Service heartbeat stale (${timeSinceHeartbeat ~/ 1000}s ago), attempting restart...');
+        final service = FlutterBackgroundService();
+        if (!await service.isRunning()) {
+          print('🔄 Service not running, restarting...');
+          await service.startService();
+        }
+      }
+    }
+
     if (mounted) {
       setState(() {
         _queuedLocations = queue.length;
@@ -844,6 +862,19 @@ class _HomePageState extends State<HomePage>
         _sessionEndTime = endTime;
         _statusMessage = 'Tracking Active';
       });
+
+      // Check if this is an aggressive OEM device (Xiaomi, Huawei, etc.)
+      // Show battery optimization dialog if not already configured
+      if (mounted) {
+        final hasShown = await BatteryOptimizationService.hasShownBatteryOptPrompt();
+        if (!hasShown) {
+          // Small delay to let the user see tracking started
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (mounted) {
+            await BatteryOptimizationService.showBatteryOptimizationDialog(context);
+          }
+        }
+      }
     } else {
       setState(() => _statusMessage = 'Failed to start');
     }

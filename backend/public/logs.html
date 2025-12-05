@@ -70,10 +70,10 @@
     </header>
 
     <!-- Stats Cards -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="glass-panel rounded-xl p-4">
             <div class="text-2xl font-semibold text-white" id="total-logs">0</div>
-            <div class="text-xs text-zinc-500">Total Logs</div>
+            <div class="text-xs text-zinc-500">Debug Logs</div>
         </div>
         <div class="glass-panel rounded-xl p-4">
             <div class="text-2xl font-semibold text-red-400" id="error-count">0</div>
@@ -87,10 +87,20 @@
             <div class="text-2xl font-semibold text-emerald-400" id="device-count">0</div>
             <div class="text-xs text-zinc-500">Devices</div>
         </div>
+        <div class="glass-panel rounded-xl p-4">
+            <div class="text-2xl font-semibold text-blue-400" id="location-count">0</div>
+            <div class="text-xs text-zinc-500">Location Points</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-2 mb-4">
+        <button onclick="switchTab('logs')" id="tab-logs" class="px-4 py-2 text-xs rounded-lg glass-panel text-white bg-white/10">Debug Logs</button>
+        <button onclick="switchTab('locations')" id="tab-locations" class="px-4 py-2 text-xs rounded-lg glass-panel text-zinc-400 hover:text-white hover:bg-white/5 transition-colors">Location Data</button>
     </div>
 
     <!-- Logs Table -->
-    <div class="glass-panel rounded-2xl overflow-hidden">
+    <div id="logs-panel" class="glass-panel rounded-2xl overflow-hidden">
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead class="border-b border-white/10">
@@ -117,10 +127,60 @@
         </div>
     </div>
 
+    <!-- Locations Table (Hidden by default) -->
+    <div id="locations-panel" class="glass-panel rounded-2xl overflow-hidden hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="border-b border-white/10">
+                    <tr class="text-left text-xs text-zinc-500">
+                        <th class="p-4 font-medium">Time</th>
+                        <th class="p-4 font-medium">Session</th>
+                        <th class="p-4 font-medium">Device</th>
+                        <th class="p-4 font-medium">Latitude</th>
+                        <th class="p-4 font-medium">Longitude</th>
+                        <th class="p-4 font-medium">Accuracy</th>
+                        <th class="p-4 font-medium">Speed</th>
+                        <th class="p-4 font-medium">Battery</th>
+                    </tr>
+                </thead>
+                <tbody id="locations-body" class="divide-y divide-white/5">
+                    <tr>
+                        <td colspan="8" class="p-8 text-center text-zinc-600 text-sm">
+                            <div class="flex flex-col items-center gap-2">
+                                <div class="w-5 h-5 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin"></div>
+                                Loading locations...
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <script>
         let allLogs = [];
+        let allLocations = [];
         let devices = [];
         let refreshInterval = null;
+        let currentTab = 'logs';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('logs-panel').classList.toggle('hidden', tab !== 'logs');
+            document.getElementById('locations-panel').classList.toggle('hidden', tab !== 'locations');
+            
+            document.getElementById('tab-logs').classList.toggle('text-white', tab === 'logs');
+            document.getElementById('tab-logs').classList.toggle('bg-white/10', tab === 'logs');
+            document.getElementById('tab-logs').classList.toggle('text-zinc-400', tab !== 'logs');
+            
+            document.getElementById('tab-locations').classList.toggle('text-white', tab === 'locations');
+            document.getElementById('tab-locations').classList.toggle('bg-white/10', tab === 'locations');
+            document.getElementById('tab-locations').classList.toggle('text-zinc-400', tab !== 'locations');
+            
+            if (tab === 'locations' && allLocations.length === 0) {
+                fetchLocations();
+            }
+        }
 
         async function fetchDevices() {
             try {
@@ -160,6 +220,54 @@
             }
         }
 
+        async function fetchLocations() {
+            const deviceId = document.getElementById('device-filter').value;
+            
+            try {
+                // Fetch all sessions first, then get locations
+                const sessionsRes = await fetch('/api/sessions');
+                const sessions = await sessionsRes.json();
+                
+                let locations = [];
+                
+                // Fetch locations for each session (limit to recent 5 sessions to avoid overload)
+                const recentSessions = sessions.slice(0, 10);
+                for (const session of recentSessions) {
+                    try {
+                        const locRes = await fetch(`/api/sessions/${session.id}/locations`);
+                        const sessionLocations = await locRes.json();
+                        
+                        // Add session info to each location
+                        sessionLocations.forEach(loc => {
+                            loc.session_id = session.id;
+                            loc.device_info = session.device_info;
+                        });
+                        
+                        locations = locations.concat(sessionLocations);
+                    } catch (e) {
+                        console.error(`Error fetching locations for session ${session.id}:`, e);
+                    }
+                }
+                
+                // Sort by timestamp desc
+                locations.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                
+                // Filter by device if selected
+                if (deviceId) {
+                    locations = locations.filter(l => l.device_info === deviceId);
+                }
+                
+                allLocations = locations.slice(0, 500); // Limit to 500
+                renderLocations();
+                document.getElementById('location-count').textContent = allLocations.length;
+            } catch (e) {
+                console.error('Error fetching locations:', e);
+                document.getElementById('locations-body').innerHTML = `
+                    <tr><td colspan="8" class="p-8 text-center text-red-400 text-sm">Error loading locations</td></tr>
+                `;
+            }
+        }
+
         function renderLogs() {
             const tbody = document.getElementById('logs-body');
             
@@ -193,6 +301,37 @@
             }).join('');
         }
 
+        function renderLocations() {
+            const tbody = document.getElementById('locations-body');
+            
+            if (allLocations.length === 0) {
+                tbody.innerHTML = `
+                    <tr><td colspan="8" class="p-8 text-center text-zinc-600 text-sm">No location data found</td></tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = allLocations.map(loc => {
+                const time = new Date(loc.timestamp).toLocaleString();
+                const speed = loc.speed ? (loc.speed * 3.6).toFixed(1) : '-';
+                const accuracy = loc.accuracy ? loc.accuracy.toFixed(1) : '-';
+                const battery = loc.battery_level != null ? `${Math.round(loc.battery_level * 100)}%` : '-';
+                
+                return `
+                    <tr class="log-row text-xs">
+                        <td class="p-4 text-zinc-400 mono whitespace-nowrap">${time}</td>
+                        <td class="p-4 text-zinc-500 mono text-[10px]" title="${loc.session_id}">${loc.session_id.substring(0, 8)}...</td>
+                        <td class="p-4 text-zinc-300 whitespace-nowrap">${loc.device_info || '-'}</td>
+                        <td class="p-4 text-emerald-400 mono">${loc.latitude.toFixed(6)}</td>
+                        <td class="p-4 text-emerald-400 mono">${loc.longitude.toFixed(6)}</td>
+                        <td class="p-4 text-zinc-300">${accuracy}m</td>
+                        <td class="p-4 text-blue-400">${speed} km/h</td>
+                        <td class="p-4 ${loc.battery_level < 0.2 ? 'text-red-400' : 'text-zinc-300'}">${battery}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
         function updateStats() {
             document.getElementById('total-logs').textContent = allLogs.length;
             document.getElementById('error-count').textContent = allLogs.filter(l => l.level === 'ERROR').length;
@@ -201,6 +340,9 @@
 
         function applyFilters() {
             fetchLogs();
+            if (currentTab === 'locations') {
+                fetchLocations();
+            }
         }
 
         function showExtra(btn) {
@@ -215,6 +357,9 @@
                 refreshInterval = setInterval(() => {
                     fetchLogs();
                     fetchDevices();
+                    if (currentTab === 'locations') {
+                        fetchLocations();
+                    }
                 }, 10000); // Refresh every 10 seconds
             }
             
@@ -223,6 +368,9 @@
                     refreshInterval = setInterval(() => {
                         fetchLogs();
                         fetchDevices();
+                        if (currentTab === 'locations') {
+                            fetchLocations();
+                        }
                     }, 10000);
                 } else {
                     clearInterval(refreshInterval);
